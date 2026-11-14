@@ -12,13 +12,30 @@
 <div class="links" id="links"><button class="link" type="button" id="toggleMode">Criar conta</button><button class="link" type="button" id="forgot">Esqueci minha senha</button></div>
 </section></main>
 <script type="module">
-import {login,signup,logout,getUser,refreshSession,handleAuthCallback,requestPasswordRecovery,updateUser,acceptInvite,AuthError,MissingIdentityError} from 'https://esm.sh/@netlify/identity@2.0.0'
+import {
+  login,
+  signup,
+  logout,
+  getUser,
+  refreshSession,
+  requestPasswordRecovery,
+  updateUser,
+  supabase,
+} from './auth-client.js'
 
-const ALLOWED_DOMAIN=/^[^@\s]+@seidor\.com$/i
+const ALLOWED_DOMAIN = /^[^@\s]+@seidor\.com$/i
 const $=id=>document.getElementById(id)
 const params=new URLSearchParams(location.search)
-const next=(p=>p&&p.startsWith('/')&&!p.startsWith('//')&&!p.startsWith('/login')?p:'/')(params.get('next'))
-let mode='login',inviteToken=null
+const basePath = new URL('./', location.href).pathname
+
+const next = (p =>
+  p && p.startsWith('/') &&
+  !p.startsWith('//') &&
+  !p.startsWith('/login')
+    ? p
+    : basePath
+)(params.get('next'))
+let mode='login'
 
 const show=(text,ok=false)=>{$('message').textContent=text;$('message').className=ok?'ok':''}
 const goNext=()=>{sessionStorage.setItem('authRedirectAt',Date.now());location.replace(next)}
@@ -30,8 +47,7 @@ function setMode(m){
   signup:{btn:'Criar conta',lead:'Crie sua conta com o e-mail corporativo <b>@seidor.com</b>.',name:true,email:true,pass:true,links:true,toggle:'Já tenho conta'},
   forgot:{btn:'Enviar link de redefinição',lead:'Informe seu e-mail <b>@seidor.com</b> para redefinir a senha.',name:false,email:true,pass:false,links:true,toggle:'Voltar ao login'},
   reset:{btn:'Salvar nova senha',lead:'Defina uma nova senha para sua conta.',name:false,email:false,pass:true,links:false},
-  invite:{btn:'Ativar conta',lead:'Defina uma senha para ativar seu convite.',name:false,email:false,pass:true,links:false}
- }[m]
+  }[m]
  $('submit').textContent=cfg.btn;$('lead').innerHTML=cfg.lead
  $('nameField').hidden=!cfg.name;$('emailField').hidden=!cfg.email;$('passwordField').hidden=!cfg.pass;$('links').hidden=!cfg.links
  $('forgot').hidden=m!=='login';$('toggleMode').textContent=cfg.toggle||''
@@ -46,15 +62,35 @@ function validEmail(){
  return ok?email:null
 }
 
-function authMessage(error){
- if(error instanceof MissingIdentityError)return 'O login não está disponível no momento. Tente novamente mais tarde.'
- if(error instanceof AuthError){
-  if(error.status===401)return mode==='signup'?'Cadastro não autorizado. Use um e-mail @seidor.com.':'E-mail ou senha inválidos, ou e-mail ainda não confirmado.'
-  if(error.status===403)return 'Cadastros estão desativados. Solicite um convite ao administrador.'
-  if(error.status===422)return 'Dados inválidos. A senha precisa ter pelo menos 8 caracteres.'
-  return error.message
- }
- return 'Não foi possível concluir. Tente novamente.'
+
+function authMessage(error) {
+  const message = error?.message || ''
+
+  if (message.includes('Use um endereço de e-mail @seidor.com')) {
+    return 'Acesso permitido somente para e-mails @seidor.com.'
+  }
+
+  if (message.includes('Invalid login credentials')) {
+    return 'E-mail ou senha inválidos, ou e-mail ainda não confirmado.'
+  }
+
+  if (message.includes('Email not confirmed')) {
+    return 'Confirme seu e-mail antes de entrar.'
+  }
+
+  if (message.includes('User already registered')) {
+    return 'Este e-mail já possui uma conta cadastrada.'
+  }
+
+  if (message.includes('Password should be')) {
+    return 'A senha precisa atender aos requisitos mínimos.'
+  }
+
+  if (message.includes('over_email_send_rate_limit')) {
+    return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.'
+  }
+
+  return message || 'Não foi possível concluir. Tente novamente.'
 }
 
 $('toggleMode').onclick=()=>{show('');setMode(mode==='login'?'signup':'login')}
@@ -71,34 +107,62 @@ $('authForm').onsubmit=async e=>{
   if(mode==='login'){await login(email,password);goNext()}
   else if(mode==='signup'){
    const user=await signup(email,password,{full_name:$('name').value.trim()})
-   if(user.emailVerified)goNext()
+   if(user.email_confirmed_at)goNext()
    else{setMode('login');show('Conta criada. Confirme pelo link enviado ao seu e-mail e depois entre.',true)}
   }
   else if(mode==='forgot'){await requestPasswordRecovery(email);setMode('login');show('Se o e-mail estiver cadastrado, você receberá um link para redefinir a senha.',true)}
   else if(mode==='reset'){await updateUser({password});goNext()}
-  else if(mode==='invite'){
-   const user=await acceptInvite(inviteToken,password)
-   if(!ALLOWED_DOMAIN.test(user.email||'')){await logout();setMode('login');show('Acesso permitido somente para e-mails @seidor.com.');return}
-   goNext()
-  }
- }catch(error){show(authMessage(error))}
+  }catch(error){show(authMessage(error))}
  finally{$('submit').disabled=false}
 }
 
-async function init(){
- setMode('login')
- try{
-  const result=await handleAuthCallback()
-  if(result?.type==='recovery'){setMode('reset');return}
-  if(result?.type==='invite'){inviteToken=result.token;setMode('invite');return}
- }catch(error){show(authMessage(error))}
- const user=await getUser()
- if(!user)return
- if(!ALLOWED_DOMAIN.test(user.email||'')){await logout();show('Acesso permitido somente para e-mails @seidor.com.');return}
- // Evita loop caso a sessão do navegador exista mas o servidor a recuse (ex.: sessão expirada).
- if(Date.now()-Number(sessionStorage.getItem('authRedirectAt')||0)<10000){await logout();show('Sua sessão expirou. Entre novamente.');return}
- await refreshSession()
- goNext()
+
+let recoveryPending = location.hash.includes('type=recovery')
+
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') {
+    recoveryPending = true
+    setMode('reset')
+  }
+})
+
+async function init() {
+  setMode('login')
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+
+    if (recoveryPending) {
+      setMode('reset')
+      return
+    }
+
+    if (!session) return
+
+    const user = session.user
+
+    if (!ALLOWED_DOMAIN.test(user.email || '')) {
+      await logout()
+      show('Acesso permitido somente para e-mails @seidor.com.')
+      return
+    }
+
+    import {
+  login,
+  signup,
+  logout,
+  requestPasswordRecovery,
+  updateUser,
+  supabase,
+} from './auth-client.js'
+
+    goNext()
+
+  } catch (error) {
+    show(authMessage(error))
+  }
 }
+
 init()
+
 </script></body></html>
