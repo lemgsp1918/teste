@@ -16,8 +16,6 @@ import {
   login,
   signup,
   logout,
-  getUser,
-  refreshSession,
   requestPasswordRecovery,
   updateUser,
   supabase,
@@ -141,20 +139,32 @@ async function init() {
 
     const user = session.user
 
+    async function init() {
+  setMode('login')
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+
+    if (recoveryPending) {
+      setMode('reset')
+      return
+    }
+
+    if (!session) return
+
+    const user = session.user
+
     if (!ALLOWED_DOMAIN.test(user.email || '')) {
       await logout()
       show('Acesso permitido somente para e-mails @seidor.com.')
       return
     }
 
-    import {
-  login,
-  signup,
-  logout,
-  requestPasswordRecovery,
-  updateUser,
-  supabase,
-} from './auth-client.js'
+    if (!user.email_confirmed_at) {
+      await logout()
+      show('Confirme seu e-mail antes de acessar.')
+      return
+    }
 
     goNext()
 
