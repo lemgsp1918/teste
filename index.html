@@ -36,7 +36,7 @@ const next = (p =>
 let mode='login'
 
 const show=(text,ok=false)=>{$('message').textContent=text;$('message').className=ok?'ok':''}
-const goNext=()=>{sessionStorage.setItem('authRedirectAt',Date.now());location.replace(next)}
+const goNext = () => location.replace(next)
 
 function setMode(m){
  mode=m
@@ -125,21 +125,6 @@ supabase.auth.onAuthStateChange((event) => {
 })
 
 async function init() {
-  setMode('login')
-
-  try {
-    const { data: { session } } = await supabase.auth.getSession()
-
-    if (recoveryPending) {
-      setMode('reset')
-      return
-    }
-
-    if (!session) return
-
-    const user = session.user
-
-    async function init() {
   setMode('login')
 
   try {
