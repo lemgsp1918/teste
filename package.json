@@ -1,0 +1,8 @@
+{
+  "name": "delivery-forecast-inbound-fci-iva",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@netlify/edge-functions": "^4.0.3"
+  }
+}
